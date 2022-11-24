@@ -238,7 +238,7 @@ func main() {
 		panic(err)
 	}
 
-	for i := 0; i < 1024; i++ {
+	for i := 0; i < length; i++ {
 		for j := 0; j < width; j++ {
 			fmt.Printf("%f ", particles[i*width+j])
 		}
