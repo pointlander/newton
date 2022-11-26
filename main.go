@@ -87,6 +87,7 @@ var (
 )
 
 func main() {
+	// 4095 4083.6013 122.103734ms
 	flag.Parse()
 	rnd := rand.New(rand.NewSource(1))
 
@@ -114,10 +115,39 @@ func main() {
 	}
 	particles := set.ByName["points"].X
 
+	dropout := tf32.U(func(k tf32.Continuation, node int, a *tf32.V, options ...map[string]interface{}) bool {
+		size, width := len(a.X), a.S[0]
+		c, drops, factor := tf32.NewV(a.S...), make([]int, width), float32(1)/(1-.1)
+		for i := range drops {
+			if rnd.Float64() > .1 {
+				drops[i] = 1
+			}
+		}
+		c.X = c.X[:cap(c.X)]
+		for i := 0; i < size; i += width {
+			for j, ax := range a.X[i : i+width] {
+				if drops[j] == 1 {
+					c.X[i+j] = ax * factor
+				}
+			}
+		}
+		if k(&c) {
+			return true
+		}
+		for i := 0; i < size; i += width {
+			for j := range a.D[i : i+width] {
+				if drops[j] == 1 {
+					a.D[i+j] += c.D[i+j]
+				}
+			}
+		}
+		return false
+	})
+
 	// The neural network is the attention model from attention is all you need
 	softmax := tf32.U(Softmax)
 	l1 := softmax(tf32.Mul(set.Get("points"), set.Get("points")))
-	l2 := softmax(tf32.Mul(tf32.T(set.Get("points")), l1))
+	l2 := softmax(tf32.Mul(tf32.T(set.Get("points")), dropout(l1)))
 	cost := tf32.Sum(tf32.Entropy(l2))
 
 	project := func(x []float32) plotter.XYs {
