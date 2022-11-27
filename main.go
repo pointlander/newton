@@ -13,6 +13,7 @@ import (
 	drw "image/draw"
 	"image/gif"
 	"math"
+	"math/cmplx"
 	"math/rand"
 	"os"
 	"time"
@@ -37,7 +38,11 @@ const (
 	// S is the scaling factor for the softmax
 	S = 1.0 - 1e-300
 	// Eta is the learning rate
-	Eta = .001
+	EtaClassical = .001
+	// Eta is the learning rate
+	EtaQuantum = .1
+	// AlphaQuantum is the momentum
+	AlphaQuantum = .1
 )
 
 const (
@@ -103,7 +108,7 @@ func main() {
 func Quantum() {
 	rnd := rand.New(rand.NewSource(1))
 
-	width, length := 8, 2*1024
+	width, length := 8, 128
 
 	// Create the weight data matrix
 	set := tc128.NewSet()
@@ -115,7 +120,163 @@ func Quantum() {
 	}
 	particles := set.ByName["particles"].X
 
-	_ = particles
+	q := tc128.Mul(set.Get("particles"), set.Get("particles"))
+	l1 := tc128.Mul(q, tc128.T(set.Get("particles")))
+	l2 := tc128.Mul(tc128.H(q), l1)
+	cost := tc128.Sum(tc128.Quadratic(set.Get("particles"), tc128.T(l2)))
+
+	deltas := make([][]complex128, 0, 8)
+	for _, p := range set.Weights {
+		deltas = append(deltas, make([]complex128, len(p.X)))
+	}
+
+	project := func(x []complex128) plotter.XYs {
+		particles64 := make([]float64, 0, len(x))
+		for _, v := range x {
+			particles64 = append(particles64, float64(cmplx.Abs(v)))
+		}
+		ranks := mat.NewDense(length, width, particles64)
+		var pc stat.PC
+		ok := pc.PrincipalComponents(ranks, nil)
+		if !ok {
+			panic("PrincipalComponents failed")
+		}
+		k := 2
+		var proj mat.Dense
+		var vec mat.Dense
+		pc.VectorsTo(&vec)
+		proj.Mul(ranks, vec.Slice(0, width, 0, k))
+
+		points := make(plotter.XYs, 0, 8)
+		for i := 0; i < length; i++ {
+			points = append(points, plotter.XY{X: proj.At(i, 0), Y: proj.At(i, 1)})
+		}
+		return points
+	}
+
+	i, points, animation := 0, make(plotter.XYs, 0, 8), &gif.GIF{}
+	// The stochastic gradient descent loop
+	for i < 512 {
+		start := time.Now()
+		// Calculate the gradients
+		total := tc128.Gradient(cost).X[0]
+
+		// Update the point weights with the partial derivatives using adam
+		sum := complex128(0.0)
+		for _, p := range set.Weights {
+			for _, d := range p.D {
+				sum += d * d
+			}
+		}
+		norm := cmplx.Sqrt(sum)
+		scaling := complex128(1.0)
+		if cmplx.Abs(norm) > 1 {
+			scaling = 1 / norm
+		}
+
+		for j, w := range set.Weights {
+			for k, d := range w.D {
+				deltas[j][k] = AlphaQuantum*deltas[j][k] - EtaQuantum*d*scaling
+				set.Weights[j].X[k] += deltas[j][k]
+			}
+		}
+
+		// Housekeeping
+		end := time.Since(start)
+		fmt.Println(i, cmplx.Abs(total), end)
+		set.Zero()
+
+		if math.IsNaN(cmplx.Abs(total)) {
+			fmt.Println(total)
+			break
+		}
+
+		points = append(points, plotter.XY{X: float64(i), Y: cmplx.Abs(total)})
+		i++
+
+		p := plot.New()
+
+		p.Title.Text = "x vs y"
+		p.X.Label.Text = "x"
+		p.Y.Label.Text = "y"
+
+		scatter, err := plotter.NewScatter(project(particles))
+		if err != nil {
+			panic(err)
+		}
+		scatter.GlyphStyle.Radius = vg.Length(3)
+		scatter.GlyphStyle.Shape = draw.CircleGlyph{}
+		p.Add(scatter)
+
+		c := vgimg.New(8*vg.Inch, 8*vg.Inch)
+		p.Draw(draw.New(c))
+
+		opts := gif.Options{
+			NumColors: 256,
+			Drawer:    drw.FloydSteinberg,
+		}
+		bounds := c.Image().Bounds()
+
+		// More or less taken from the image/gif package
+		paletted := image.NewPaletted(bounds, palette.Plan9[:opts.NumColors])
+		if opts.Quantizer != nil {
+			paletted.Palette = opts.Quantizer.Quantize(make(color.Palette, 0, opts.NumColors), c.Image())
+		}
+		opts.Drawer.Draw(paletted, bounds, c.Image(), image.ZP)
+
+		animation.Image = append(animation.Image, paletted)
+		animation.Delay = append(animation.Delay, 0)
+	}
+
+	f, _ := os.OpenFile("animation.gif", os.O_WRONLY|os.O_CREATE, 0600)
+	defer f.Close()
+	gif.EncodeAll(f, animation)
+
+	// Plot the cost
+	p := plot.New()
+
+	p.Title.Text = "epochs vs cost"
+	p.X.Label.Text = "epochs"
+	p.Y.Label.Text = "cost"
+
+	scatter, err := plotter.NewScatter(points)
+	if err != nil {
+		panic(err)
+	}
+	scatter.GlyphStyle.Radius = vg.Length(1)
+	scatter.GlyphStyle.Shape = draw.CircleGlyph{}
+	p.Add(scatter)
+
+	err = p.Save(8*vg.Inch, 8*vg.Inch, "cost.png")
+	if err != nil {
+		panic(err)
+	}
+
+	for i := 0; i < length; i++ {
+		for j := 0; j < width; j++ {
+			fmt.Printf("%f ", cmplx.Abs(particles[i*width+j]))
+		}
+		fmt.Println()
+	}
+
+	p = plot.New()
+
+	p.Title.Text = "x vs y"
+	p.X.Label.Text = "x"
+	p.Y.Label.Text = "y"
+
+	scatter, err = plotter.NewScatter(project(particles))
+	if err != nil {
+		panic(err)
+	}
+	scatter.GlyphStyle.Radius = vg.Length(3)
+	scatter.GlyphStyle.Shape = draw.CircleGlyph{}
+	p.Add(scatter)
+
+	err = p.Save(8*vg.Inch, 8*vg.Inch, "projection.png")
+	if err != nil {
+		panic(err)
+	}
 }
 
 // Classical is a classical model
@@ -225,7 +386,7 @@ func Classical() {
 				w.States[StateV][k] = v
 				mhat := m / (1 - b1)
 				vhat := v / (1 - b2)
-				set.Weights[j].X[k] -= Eta * mhat / (float32(math.Sqrt(float64(vhat))) + 1e-8)
+				set.Weights[j].X[k] -= EtaClassical * mhat / (float32(math.Sqrt(float64(vhat))) + 1e-8)
 			}
 		}
 
