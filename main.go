@@ -17,6 +17,7 @@ import (
 	"os"
 	"time"
 
+	"github.com/pointlander/gradient/tc128"
 	"github.com/pointlander/gradient/tf32"
 
 	"gonum.org/v1/gonum/mat"
@@ -80,15 +81,46 @@ func Softmax(k tf32.Continuation, node int, a *tf32.V, options ...map[string]int
 }
 
 var (
-	//FlagInfer inference mode
-	FlagInfer = flag.String("infer", "", "inference mode")
-	//FlagTrain train mode
-	FlagTrain = flag.String("train", "en", "train mode")
+	//FlagClassical classical mode
+	FlagClassical = flag.Bool("classical", false, "classical mode")
+	//FlagQuantum quantum mode
+	FlagQuantum = flag.Bool("quantum", false, "quantum mode")
 )
 
 func main() {
-	// 4095 4083.6013 122.103734ms
 	flag.Parse()
+	if *FlagClassical {
+		Classical()
+		return
+	}
+	if *FlagQuantum {
+		Quantum()
+		return
+	}
+}
+
+// Quantum is a quantum model
+func Quantum() {
+	rnd := rand.New(rand.NewSource(1))
+
+	width, length := 8, 2*1024
+
+	// Create the weight data matrix
+	set := tc128.NewSet()
+	set.Add("particles", width, length)
+	for _, w := range set.Weights {
+		for i := 0; i < cap(w.X); i++ {
+			w.X = append(w.X, complex((2*rnd.Float64()-1), (2*rnd.Float64()-1)))
+		}
+	}
+	particles := set.ByName["particles"].X
+
+	_ = particles
+}
+
+// Classical is a classical model
+func Classical() {
+	// 4095 4083.6013 122.103734ms
 	rnd := rand.New(rand.NewSource(1))
 
 	width, length := 8, 2*1024
