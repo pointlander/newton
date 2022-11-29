@@ -16,6 +16,7 @@ import (
 	"math/cmplx"
 	"math/rand"
 	"os"
+	"runtime"
 	"time"
 
 	"github.com/pointlander/gradient/tc128"
@@ -43,6 +44,8 @@ const (
 	EtaQuantum = .1
 	// AlphaQuantum is the momentum
 	AlphaQuantum = .1
+	// Epochs is the number of epochs
+	Epochs = 512
 )
 
 const (
@@ -154,9 +157,9 @@ func Quantum() {
 		return points
 	}
 
-	i, points, animation := 0, make(plotter.XYs, 0, 8), &gif.GIF{}
+	i, points, animation, states := 0, make(plotter.XYs, 0, 8), &gif.GIF{}, make([][]complex128, Epochs)
 	// The stochastic gradient descent loop
-	for i < 512 {
+	for i < Epochs {
 		start := time.Now()
 		// Calculate the gradients
 		total := tc128.Gradient(cost).X[0]
@@ -191,16 +194,23 @@ func Quantum() {
 			break
 		}
 
+		state := make([]complex128, len(particles))
+		copy(state, particles)
+		states[i] = state
+
 		points = append(points, plotter.XY{X: float64(i), Y: cmplx.Abs(total)})
 		i++
+	}
 
+	done, images := make(chan bool, 8), make([]*image.Paletted, Epochs)
+	generate := func(i int) {
 		p := plot.New()
 
 		p.Title.Text = "x vs y"
 		p.X.Label.Text = "x"
 		p.Y.Label.Text = "y"
 
-		scatter, err := plotter.NewScatter(project(particles))
+		scatter, err := plotter.NewScatter(project(states[i]))
 		if err != nil {
 			panic(err)
 		}
@@ -224,6 +234,31 @@ func Quantum() {
 		}
 		opts.Drawer.Draw(paletted, bounds, c.Image(), image.ZP)
 
+		images[i] = paletted
+		done <- true
+	}
+
+	i, flight := 0, 0
+	for i < runtime.NumCPU() && i < Epochs {
+		go generate(i)
+		flight++
+		i++
+	}
+
+	for i < Epochs {
+		<-done
+		flight--
+		go generate(i)
+		flight++
+		i++
+	}
+
+	for flight > 0 {
+		<-done
+		flight--
+	}
+
+	for _, paletted := range images {
 		animation.Image = append(animation.Image, paletted)
 		animation.Delay = append(animation.Delay, 0)
 	}
