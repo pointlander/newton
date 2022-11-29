@@ -122,6 +122,10 @@ func Quantum() {
 		for i := 0; i < cap(w.X); i++ {
 			w.X = append(w.X, complex((2*rnd.Float64()-1), (2*rnd.Float64()-1)))
 		}
+		w.States = make([][]complex128, 1)
+		for i := range w.States {
+			w.States[i] = make([]complex128, len(w.X))
+		}
 	}
 	particles := set.ByName["particles"].X
 
@@ -129,11 +133,6 @@ func Quantum() {
 	l1 := tc128.Mul(q, tc128.T(set.Get("particles")))
 	l2 := tc128.Mul(tc128.H(q), l1)
 	cost := tc128.Sum(tc128.Quadratic(set.Get("particles"), tc128.T(l2)))
-
-	deltas := make([][]complex128, 0, 8)
-	for _, p := range set.Weights {
-		deltas = append(deltas, make([]complex128, len(p.X)))
-	}
 
 	project := func(x []complex128) plotter.XYs {
 		particles64 := make([]float64, 0, len(x))
@@ -181,8 +180,8 @@ func Quantum() {
 
 		for j, w := range set.Weights {
 			for k, d := range w.D {
-				deltas[j][k] = AlphaQuantum*deltas[j][k] - EtaQuantum*d*scaling
-				set.Weights[j].X[k] += deltas[j][k]
+				w.States[0][k] = AlphaQuantum*w.States[0][k] - EtaQuantum*d*scaling
+				set.Weights[j].X[k] += w.States[0][k]
 			}
 		}
 
