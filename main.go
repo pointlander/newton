@@ -232,7 +232,7 @@ func Quantum() {
 		if opts.Quantizer != nil {
 			paletted.Palette = opts.Quantizer.Quantize(make(color.Palette, 0, opts.NumColors), c.Image())
 		}
-		opts.Drawer.Draw(paletted, bounds, c.Image(), image.ZP)
+		opts.Drawer.Draw(paletted, bounds, c.Image(), image.Point{})
 
 		images[i] = paletted
 		done <- true
@@ -466,7 +466,7 @@ func Classical() {
 		if opts.Quantizer != nil {
 			paletted.Palette = opts.Quantizer.Quantize(make(color.Palette, 0, opts.NumColors), c.Image())
 		}
-		opts.Drawer.Draw(paletted, bounds, c.Image(), image.ZP)
+		opts.Drawer.Draw(paletted, bounds, c.Image(), image.Point{})
 
 		animation.Image = append(animation.Image, paletted)
 		animation.Delay = append(animation.Delay, 0)
