@@ -44,8 +44,10 @@ const (
 	EtaQuantum = .1
 	// AlphaQuantum is the momentum
 	AlphaQuantum = .1
+	// EpochsClassical is the number of epochs for classical mode
+	EpochsClassical = 4 * 1024
 	// Epochs is the number of epochs
-	Epochs = 512
+	EpochsQuantum = 512
 )
 
 const (
@@ -157,9 +159,9 @@ func Quantum() {
 		return points
 	}
 
-	i, points, animation, states := 0, make(plotter.XYs, 0, 8), &gif.GIF{}, make([][]complex128, Epochs)
+	i, points, animation, states := 0, make(plotter.XYs, 0, 8), &gif.GIF{}, make([][]complex128, EpochsQuantum)
 	// The stochastic gradient descent loop
-	for i < Epochs {
+	for i < EpochsQuantum {
 		start := time.Now()
 		// Calculate the gradients
 		total := tc128.Gradient(cost).X[0]
@@ -202,7 +204,7 @@ func Quantum() {
 		i++
 	}
 
-	done, images := make(chan bool, 8), make([]*image.Paletted, Epochs)
+	done, images := make(chan bool, 8), make([]*image.Paletted, EpochsQuantum)
 	generate := func(i int) {
 		p := plot.New()
 
@@ -239,13 +241,13 @@ func Quantum() {
 	}
 
 	i, flight := 0, 0
-	for i < runtime.NumCPU() && i < Epochs {
+	for i < runtime.NumCPU() && i < EpochsQuantum {
 		go generate(i)
 		flight++
 		i++
 	}
 
-	for i < Epochs {
+	for i < EpochsQuantum {
 		<-done
 		flight--
 		go generate(i)
@@ -402,10 +404,9 @@ func Classical() {
 		return points
 	}
 
-	points := make(plotter.XYs, 0, 8)
-	animation := &gif.GIF{}
+	points, animation, states := make(plotter.XYs, 0, 8), &gif.GIF{}, make([][]float32, EpochsClassical)
 	// The stochastic gradient descent loop
-	for i < 4*1024 {
+	for i < EpochsClassical+1 {
 		start := time.Now()
 		// Calculate the gradients
 		total := tf32.Gradient(cost).X[0]
@@ -435,16 +436,23 @@ func Classical() {
 			break
 		}
 
+		state := make([]float32, len(particles))
+		copy(state, particles)
+		states[i-1] = state
+
 		points = append(points, plotter.XY{X: float64(i), Y: float64(total)})
 		i++
+	}
 
+	done, images := make(chan bool, 8), make([]*image.Paletted, EpochsClassical)
+	generate := func(i int) {
 		p := plot.New()
 
 		p.Title.Text = "x vs y"
 		p.X.Label.Text = "x"
 		p.Y.Label.Text = "y"
 
-		scatter, err := plotter.NewScatter(project(particles))
+		scatter, err := plotter.NewScatter(project(states[i]))
 		if err != nil {
 			panic(err)
 		}
@@ -468,6 +476,31 @@ func Classical() {
 		}
 		opts.Drawer.Draw(paletted, bounds, c.Image(), image.Point{})
 
+		images[i] = paletted
+		done <- true
+	}
+
+	i, flight := 0, 0
+	for i < runtime.NumCPU() && i < EpochsClassical {
+		go generate(i)
+		flight++
+		i++
+	}
+
+	for i < EpochsClassical {
+		<-done
+		flight--
+		go generate(i)
+		flight++
+		i++
+	}
+
+	for flight > 0 {
+		<-done
+		flight--
+	}
+
+	for _, paletted := range images {
 		animation.Image = append(animation.Image, paletted)
 		animation.Delay = append(animation.Delay, 0)
 	}
