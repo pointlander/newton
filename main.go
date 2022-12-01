@@ -47,7 +47,7 @@ const (
 	// EpochsClassical is the number of epochs for classical mode
 	EpochsClassical = 4 * 1024
 	// Epochs is the number of epochs
-	EpochsQuantum = 512
+	EpochsQuantum = 1024
 )
 
 const (
@@ -118,9 +118,12 @@ func Quantum() {
 	// Create the weight data matrix
 	set := tc128.NewSet()
 	set.Add("particles", width, length)
+	set.Add("w1", width, width)
+	set.Add("w2", width, width)
 	for _, w := range set.Weights {
+		factor := math.Sqrt(2.0 / float64(w.S[0]))
 		for i := 0; i < cap(w.X); i++ {
-			w.X = append(w.X, complex((2*rnd.Float64()-1), (2*rnd.Float64()-1)))
+			w.X = append(w.X, complex((2*rnd.Float64()-1)*factor, (2*rnd.Float64()-1)*factor))
 		}
 		w.States = make([][]complex128, 1)
 		for i := range w.States {
@@ -129,7 +132,9 @@ func Quantum() {
 	}
 	particles := set.ByName["particles"].X
 
-	q := tc128.Mul(set.Get("particles"), set.Get("particles"))
+	a := tc128.Mul(set.Get("w1"), set.Get("particles"))
+	b := tc128.Mul(set.Get("w2"), set.Get("particles"))
+	q := tc128.Mul(a, b)
 	l1 := tc128.Mul(q, tc128.T(set.Get("particles")))
 	l2 := tc128.Mul(tc128.H(q), l1)
 	cost := tc128.Sum(tc128.Quadratic(set.Get("particles"), tc128.T(l2)))
