@@ -41,13 +41,13 @@ const (
 	// Eta is the learning rate
 	EtaClassical = .001
 	// Eta is the learning rate
-	EtaQuantum = .1
+	EtaQuantum = .001
 	// AlphaQuantum is the momentum
-	AlphaQuantum = .1
+	AlphaQuantum = .9
 	// EpochsClassical is the number of epochs for classical mode
 	EpochsClassical = 4 * 1024
 	// Epochs is the number of epochs
-	EpochsQuantum = 1024
+	EpochsQuantum = 2 * 1024
 )
 
 const (
@@ -137,7 +137,7 @@ func Quantum() {
 	q := tc128.Mul(a, b)
 	l1 := tc128.Mul(q, tc128.T(set.Get("particles")))
 	l2 := tc128.Mul(tc128.H(q), l1)
-	cost := tc128.Sum(tc128.Quadratic(set.Get("particles"), tc128.T(l2)))
+	cost := tc128.Avg(tc128.Quadratic(set.Get("particles"), tc128.T(l2)))
 
 	project := func(x []complex128) plotter.XYs {
 		particles64 := make([]float64, 0, len(x))
