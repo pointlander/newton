@@ -325,7 +325,7 @@ func Classical() {
 	// 4095 4083.6013 122.103734ms
 	rnd := rand.New(rand.NewSource(1))
 
-	width, length := 8, 2*1024
+	width, length := 8, 128
 	i := 1
 	pow := func(x float32) float32 {
 		y := math.Pow(float64(x), float64(i))
@@ -339,8 +339,9 @@ func Classical() {
 	set := tf32.NewSet()
 	set.Add("points", width, length)
 	for _, w := range set.Weights {
+		factor := math.Sqrt(2.0 / float64(w.S[0]))
 		for i := 0; i < cap(w.X); i++ {
-			w.X = append(w.X, float32((2*rnd.Float64() - 1)))
+			w.X = append(w.X, float32((2*rnd.Float64()-1)*factor))
 		}
 		w.States = make([][]float32, StateTotal)
 		for i := range w.States {
@@ -378,10 +379,12 @@ func Classical() {
 		return false
 	})
 
+	_ = dropout
+
 	// The neural network is the attention model from attention is all you need
 	softmax := tf32.U(Softmax)
 	l1 := softmax(tf32.Mul(set.Get("points"), set.Get("points")))
-	l2 := softmax(tf32.Mul(tf32.T(set.Get("points")), dropout(l1)))
+	l2 := softmax(tf32.Mul(tf32.T(set.Get("points")), l1))
 	cost := tf32.Sum(tf32.Entropy(l2))
 
 	project := func(x []float32) plotter.XYs {
