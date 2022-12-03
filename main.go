@@ -174,9 +174,18 @@ func (n *Node) Live() {
 			i++
 
 			if n.Rnd.Intn(1024) == 0 {
+				average := make([]float32, n.Width)
+				for j := 0; j < n.Length; j++ {
+					for k := 0; k < n.Width; k++ {
+						average[k] += n.Set.Weights[0].X[j*n.Width+k]
+					}
+				}
+				for k := 0; k < n.Width; k++ {
+					average[k] /= float32(n.Length)
+				}
 				n.Out <- Message{
 					I: n.Index,
-					V: n.Set.Weights[0].X[n.Index*n.Width : n.Index*n.Width+n.Width],
+					V: average,
 				}
 			}
 		}
