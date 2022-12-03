@@ -140,7 +140,11 @@ func (n *Node) Live() {
 	cost := tf32.Sum(tf32.Entropy(l2))
 	for {
 		select {
-		case m := <-n.In:
+		case m, ok := <-n.In:
+			if !ok {
+				close(n.Out)
+				return
+			}
 			copy(n.Set.Weights[0].X[m.I*n.Width:m.I*n.Width+n.Width], m.V)
 		default:
 			// Calculate the gradients
