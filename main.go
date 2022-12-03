@@ -59,6 +59,106 @@ const (
 	StateTotal
 )
 
+// Message is a neural network message
+type Message struct {
+	I int
+	V []float32
+}
+
+// Node is a node in the neural network
+type Node struct {
+	Index  int
+	Width  int
+	Length int
+	Rnd    *rand.Rand
+	In     <-chan Message
+	Out    chan<- Message
+	Set    tf32.Set
+}
+
+// NewNode creates a new node
+func NewNode(seed int64, index, width, length int, in <-chan Message) *Node {
+	rnd := rand.New(rand.NewSource(seed))
+	set := tf32.NewSet()
+	set.Add("points", width, length)
+	for _, w := range set.Weights {
+		factor := math.Sqrt(2.0 / float64(w.S[0]))
+		for i := 0; i < cap(w.X); i++ {
+			w.X = append(w.X, float32((2*rnd.Float64()-1)*factor))
+		}
+		w.States = make([][]float32, StateTotal)
+		for i := range w.States {
+			w.States[i] = make([]float32, len(w.X))
+		}
+	}
+
+	return &Node{
+		Index:  index,
+		Width:  width,
+		Length: length,
+		Rnd:    rnd,
+		In:     in,
+		Out:    make(chan Message, 8),
+		Set:    set,
+	}
+}
+
+// Live brings the neural network to life
+func (n *Node) Live() {
+	i := 1
+	pow := func(x float32) float32 {
+		y := math.Pow(float64(x), float64(i))
+		if math.IsNaN(y) || math.IsInf(y, 0) {
+			return 0
+		}
+		return float32(y)
+	}
+
+	softmax := tf32.U(Softmax)
+	l1 := softmax(tf32.Mul(n.Set.Get("points"), n.Set.Get("points")))
+	l2 := softmax(tf32.Mul(tf32.T(n.Set.Get("points")), l1))
+	cost := tf32.Sum(tf32.Entropy(l2))
+	for {
+		select {
+		case m := <-n.In:
+			copy(n.Set.Weights[0].X[m.I*n.Width:m.I*n.Width+n.Width], m.V)
+		default:
+			// Calculate the gradients
+			total := tf32.Gradient(cost).X[0]
+
+			// Update the point weights with the partial derivatives using adam
+			b1, b2 := pow(B1), pow(B2)
+			for j, w := range n.Set.Weights {
+				for k, d := range w.D {
+					g := d
+					m := B1*w.States[StateM][k] + (1-B1)*g
+					v := B2*w.States[StateV][k] + (1-B2)*g*g
+					w.States[StateM][k] = m
+					w.States[StateV][k] = v
+					mhat := m / (1 - b1)
+					vhat := v / (1 - b2)
+					n.Set.Weights[j].X[k] -= EtaClassical * mhat / (float32(math.Sqrt(float64(vhat))) + 1e-8)
+				}
+			}
+
+			n.Set.Zero()
+
+			if math.IsNaN(float64(total)) {
+				panic(fmt.Errorf("nan"))
+			}
+
+			i++
+
+			if n.Rnd.Intn(1024) == 0 {
+				n.Out <- Message{
+					I: n.Index,
+					V: n.Set.Weights[0].X[n.Index*n.Width : n.Index*n.Width+n.Width],
+				}
+			}
+		}
+	}
+}
+
 // Softmax is the softmax function for big numbers
 func Softmax(k tf32.Continuation, node int, a *tf32.V, options ...map[string]interface{}) bool {
 	c, size, width := tf32.NewV(a.S...), len(a.X), a.S[0]
