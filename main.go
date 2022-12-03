@@ -17,6 +17,7 @@ import (
 	"math/rand"
 	"os"
 	"runtime"
+	"sync"
 	"time"
 
 	"github.com/pointlander/gradient/tc128"
@@ -101,6 +102,25 @@ func NewNode(seed int64, index, width, length int, in <-chan Message) *Node {
 		Out:    make(chan Message, 8),
 		Set:    set,
 	}
+}
+
+func merge(cs ...<-chan Message) <-chan Message {
+	out := make(chan Message, 8)
+	var wg sync.WaitGroup
+	wg.Add(len(cs))
+	for _, c := range cs {
+		go func(c <-chan Message) {
+			for v := range c {
+				out <- v
+			}
+			wg.Done()
+		}(c)
+	}
+	go func() {
+		wg.Wait()
+		close(out)
+	}()
+	return out
 }
 
 // Live brings the neural network to life
