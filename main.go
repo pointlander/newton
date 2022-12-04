@@ -104,10 +104,15 @@ func NewNode(seed int64, index, width, length int, in <-chan Message) *Node {
 	}
 }
 
-func merge(cs ...<-chan Message) <-chan Message {
+func merge(cs ...chan Message) <-chan Message {
 	out := make(chan Message, 8)
 	var wg sync.WaitGroup
 	wg.Add(len(cs))
+	go func() {
+		for m := range out {
+			cs[m.I] <- m
+		}
+	}()
 	for _, c := range cs {
 		go func(c <-chan Message) {
 			for v := range c {
