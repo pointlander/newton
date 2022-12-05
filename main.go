@@ -41,6 +41,8 @@ const (
 	S = 1.0 - 1e-300
 	// Eta is the learning rate
 	EtaClassical = .001
+	// EtaDistributed is the learning rate
+	EtaDistributed = .00001
 	// Eta is the learning rate
 	EtaQuantum = .001
 	// AlphaQuantum is the momentum
@@ -164,7 +166,7 @@ func (n *Node) Live(fire bool) {
 				w.States[StateV][k] = v
 				mhat := m / (1 - b1)
 				vhat := v / (1 - b2)
-				n.Set.Weights[j].X[k] -= EtaClassical * mhat / (float32(math.Sqrt(float64(vhat))) + 1e-8)
+				n.Set.Weights[j].X[k] -= EtaDistributed * mhat / (float32(math.Sqrt(float64(vhat))) + 1e-8)
 			}
 		}
 		lock.Unlock()
