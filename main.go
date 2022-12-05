@@ -72,13 +72,15 @@ type Node struct {
 	Width  int
 	Length int
 	Rnd    *rand.Rand
-	In     chan Message
+	In     []chan Message
+	R      []chan Message
 	Out    chan Message
+	Reply  chan Message
 	Set    tf32.Set
 }
 
 // NewNode creates a new node
-func NewNode(seed int64, index, width, length int, in chan Message) *Node {
+func NewNode(seed int64, index, width, length int, in, R []chan Message) *Node {
 	rnd := rand.New(rand.NewSource(seed))
 	set := tf32.NewSet()
 	set.Add("points", width, length)
@@ -99,34 +101,11 @@ func NewNode(seed int64, index, width, length int, in chan Message) *Node {
 		Length: length,
 		Rnd:    rnd,
 		In:     in,
+		R:      R,
 		Out:    make(chan Message, 8),
+		Reply:  make(chan Message, 8),
 		Set:    set,
 	}
-}
-
-func merge(cs ...chan Message) chan Message {
-	out := make(chan Message, 8)
-	var wg sync.WaitGroup
-	wg.Add(len(cs))
-	go func() {
-		for m := range out {
-			fmt.Println("here", m.I)
-			cs[m.I] <- m
-		}
-	}()
-	for _, c := range cs {
-		go func(c <-chan Message) {
-			for v := range c {
-				out <- v
-			}
-			wg.Done()
-		}(c)
-	}
-	go func() {
-		wg.Wait()
-		close(out)
-	}()
-	return out
 }
 
 // Live brings the neural network to life
@@ -145,82 +124,98 @@ func (n *Node) Live(fire bool) {
 	l1 := softmax(a)
 	l2 := softmax(tf32.Mul(tf32.T(n.Set.Get("points")), l1))
 	cost := tf32.Sum(tf32.Entropy(l2))
-	for {
-		select {
-		case m := <-n.Out:
-			m.V = n.Set.Weights[0].X[m.I*n.Width : m.I*n.Width+n.Width]
-			fmt.Println("there", n.Index)
-			n.Out <- m
-		case m, ok := <-n.In:
-			fmt.Println("over there", n.Index, m.I, m.V)
-			if !ok {
-				close(n.Out)
-				return
-			}
-			copy(n.Set.Weights[0].X[m.I*n.Width:m.I*n.Width+n.Width], m.V)
-		default:
-			// Calculate the gradients
-			total := tf32.Gradient(cost).X[0]
-
-			// Update the point weights with the partial derivatives using adam
-			b1, b2 := pow(B1), pow(B2)
-			for j, w := range n.Set.Weights {
-				for k, d := range w.D {
-					g := d
-					m := B1*w.States[StateM][k] + (1-B1)*g
-					v := B2*w.States[StateV][k] + (1-B2)*g*g
-					w.States[StateM][k] = m
-					w.States[StateV][k] = v
-					mhat := m / (1 - b1)
-					vhat := v / (1 - b2)
-					n.Set.Weights[j].X[k] -= EtaClassical * mhat / (float32(math.Sqrt(float64(vhat))) + 1e-8)
+	lock := sync.RWMutex{}
+	for i := range n.In {
+		go func(i int) {
+			select {
+			case m := <-n.Reply:
+				weights := make([]float32, n.Width)
+				lock.RLock()
+				copy(weights, n.Set.Weights[0].X[m.I*n.Width:m.I*n.Width+n.Width])
+				lock.RUnlock()
+				m.V = weights
+				fmt.Println("there", n.Index, i, m.I, m.V)
+				n.Out <- m
+			case m, ok := <-n.In[i]:
+				fmt.Println("over there", n.Index, m.I, m.V, len(n.In[i]))
+				if !ok {
+					close(n.Out)
+					return
 				}
+				lock.Lock()
+				copy(n.Set.Weights[0].X[m.I*n.Width:m.I*n.Width+n.Width], m.V)
+				lock.Unlock()
 			}
+		}(i)
+	}
+	for {
+		// Calculate the gradients
+		lock.RLock()
+		total := tf32.Gradient(cost).X[0]
+		lock.RUnlock()
 
-			n.Set.Zero()
-
-			if math.IsNaN(float64(total)) {
-				fmt.Println(n.Set.Weights[0].States)
-				panic(fmt.Errorf("nan %d", n.Index))
+		// Update the point weights with the partial derivatives using adam
+		lock.Lock()
+		b1, b2 := pow(B1), pow(B2)
+		for j, w := range n.Set.Weights {
+			for k, d := range w.D {
+				g := d
+				m := B1*w.States[StateM][k] + (1-B1)*g
+				v := B2*w.States[StateV][k] + (1-B2)*g*g
+				w.States[StateM][k] = m
+				w.States[StateV][k] = v
+				mhat := m / (1 - b1)
+				vhat := v / (1 - b2)
+				n.Set.Weights[j].X[k] -= EtaClassical * mhat / (float32(math.Sqrt(float64(vhat))) + 1e-8)
 			}
+		}
+		lock.Unlock()
 
-			i++
+		n.Set.Zero()
 
-			if fire && i%(64*1024) == 0 {
-				max, x, y := float32(0.0), 0, 0
-				a(func(a *tf32.V) bool {
-					for i := 0; i < n.Length; i++ {
-						for j := 0; j < n.Width; j++ {
-							if a.X[i*n.Width+j] > max {
-								max = a.X[i*n.Width+j]
-								x, y = j, i
-							}
+		if math.IsNaN(float64(total)) {
+			fmt.Println(n.Set.Weights[0].States)
+			panic(fmt.Errorf("nan %d", n.Index))
+		}
+
+		i++
+
+		if fire && i%(32*1024) == 0 {
+			lock.RLock()
+			max, x, y := float32(0.0), 0, 0
+			a(func(a *tf32.V) bool {
+				for i := 0; i < n.Length; i++ {
+					for j := 0; j < n.Width; j++ {
+						if a.X[i*n.Width+j] > max {
+							max = a.X[i*n.Width+j]
+							x, y = j, i
 						}
 					}
-					return true
-				})
-				fmt.Println(n.Index, x, y, max)
-				n.In <- Message{
-					I: x,
 				}
-				n.In <- Message{
-					I: y,
-				}
+				return true
+			})
+			fmt.Println(n.Index, x, y, max)
+			n.R[x] <- Message{
+				I: x,
+			}
+			n.R[y] <- Message{
+				I: y,
+			}
 
-				average := make([]float32, n.Width)
-				for j := 0; j < n.Length; j++ {
-					for k := 0; k < n.Width; k++ {
-						average[k] += n.Set.Weights[0].X[j*n.Width+k]
-					}
-				}
+			average := make([]float32, n.Width)
+			for j := 0; j < n.Length; j++ {
 				for k := 0; k < n.Width; k++ {
-					average[k] /= float32(n.Length)
+					average[k] += n.Set.Weights[0].X[j*n.Width+k]
 				}
-				fmt.Println(n.Index, average)
-				n.Out <- Message{
-					I: n.Index,
-					V: average,
-				}
+			}
+			lock.RUnlock()
+			for k := 0; k < n.Width; k++ {
+				average[k] /= float32(n.Length)
+			}
+			fmt.Println("output", n.Index, average)
+			n.Out <- Message{
+				I: n.Index,
+				V: average,
 			}
 		}
 	}
@@ -284,16 +279,18 @@ func main() {
 
 // Distributed distributed mode
 func Distributed() {
-	in, out := make([]chan Message, 8), make([]chan Message, 8)
+	in, reply, out, reply2 := make([]chan Message, 8), make([]chan Message, 8), make([]chan Message, 8), make([]chan Message, 8)
 	for i := range in {
 		in[i] = make(chan Message, 8)
+		reply[i] = make(chan Message, 8)
 	}
 	nodes := make([]*Node, 8)
 	for i := range nodes {
-		nodes[i] = NewNode(int64(i+1), i, 8, 8, in[i])
+		nodes[i] = NewNode(int64(i+1), i, 8, 8, in, reply)
 		out[i] = nodes[i].Out
+		reply2[i] = nodes[i].Reply
 	}
-	head := NewNode(9, 9, 8, 8, merge(out...))
+	head := NewNode(9, 9, 8, 8, out, reply2)
 	for _, n := range nodes {
 		go n.Live(false)
 	}
