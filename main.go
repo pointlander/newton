@@ -125,23 +125,21 @@ func (n *Node) Live(fire bool) {
 	l2 := softmax(tf32.Mul(tf32.T(n.Set.Get("points")), l1))
 	cost := tf32.Sum(tf32.Entropy(l2))
 	lock := sync.RWMutex{}
+	go func() {
+		for m := range n.Reply {
+			weights := make([]float32, n.Width)
+			lock.RLock()
+			copy(weights, n.Set.Weights[0].X[m.I*n.Width:m.I*n.Width+n.Width])
+			lock.RUnlock()
+			m.V = weights
+			fmt.Println("there", n.Index, m.I, m.V)
+			n.Out <- m
+		}
+	}()
 	for i := range n.In {
 		go func(i int) {
-			select {
-			case m := <-n.Reply:
-				weights := make([]float32, n.Width)
-				lock.RLock()
-				copy(weights, n.Set.Weights[0].X[m.I*n.Width:m.I*n.Width+n.Width])
-				lock.RUnlock()
-				m.V = weights
-				fmt.Println("there", n.Index, i, m.I, m.V)
-				n.Out <- m
-			case m, ok := <-n.In[i]:
+			for m := range n.In[i] {
 				fmt.Println("over there", n.Index, m.I, m.V, len(n.In[i]))
-				if !ok {
-					close(n.Out)
-					return
-				}
 				lock.Lock()
 				copy(n.Set.Weights[0].X[m.I*n.Width:m.I*n.Width+n.Width], m.V)
 				lock.Unlock()
