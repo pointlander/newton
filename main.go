@@ -72,13 +72,13 @@ type Node struct {
 	Width  int
 	Length int
 	Rnd    *rand.Rand
-	In     <-chan Message
-	Out    chan<- Message
+	In     chan Message
+	Out    chan Message
 	Set    tf32.Set
 }
 
 // NewNode creates a new node
-func NewNode(seed int64, index, width, length int, in <-chan Message) *Node {
+func NewNode(seed int64, index, width, length int, in chan Message) *Node {
 	rnd := rand.New(rand.NewSource(seed))
 	set := tf32.NewSet()
 	set.Add("points", width, length)
@@ -104,12 +104,13 @@ func NewNode(seed int64, index, width, length int, in <-chan Message) *Node {
 	}
 }
 
-func merge(cs ...chan Message) <-chan Message {
+func merge(cs ...chan Message) chan Message {
 	out := make(chan Message, 8)
 	var wg sync.WaitGroup
 	wg.Add(len(cs))
 	go func() {
 		for m := range out {
+			fmt.Println("here", m.I)
 			cs[m.I] <- m
 		}
 	}()
@@ -129,7 +130,7 @@ func merge(cs ...chan Message) <-chan Message {
 }
 
 // Live brings the neural network to life
-func (n *Node) Live() {
+func (n *Node) Live(fire bool) {
 	i := 1
 	pow := func(x float32) float32 {
 		y := math.Pow(float64(x), float64(i))
@@ -140,12 +141,18 @@ func (n *Node) Live() {
 	}
 
 	softmax := tf32.U(Softmax)
-	l1 := softmax(tf32.Mul(n.Set.Get("points"), n.Set.Get("points")))
+	a := tf32.Mul(n.Set.Get("points"), n.Set.Get("points"))
+	l1 := softmax(a)
 	l2 := softmax(tf32.Mul(tf32.T(n.Set.Get("points")), l1))
 	cost := tf32.Sum(tf32.Entropy(l2))
 	for {
 		select {
+		case m := <-n.Out:
+			m.V = n.Set.Weights[0].X[m.I*n.Width : m.I*n.Width+n.Width]
+			fmt.Println("there", n.Index)
+			n.Out <- m
 		case m, ok := <-n.In:
+			fmt.Println("over there", n.Index, m.I, m.V)
 			if !ok {
 				close(n.Out)
 				return
@@ -173,12 +180,33 @@ func (n *Node) Live() {
 			n.Set.Zero()
 
 			if math.IsNaN(float64(total)) {
-				panic(fmt.Errorf("nan"))
+				fmt.Println(n.Set.Weights[0].States)
+				panic(fmt.Errorf("nan %d", n.Index))
 			}
 
 			i++
 
-			if n.Rnd.Intn(1024) == 0 {
+			if fire && i%(64*1024) == 0 {
+				max, x, y := float32(0.0), 0, 0
+				a(func(a *tf32.V) bool {
+					for i := 0; i < n.Length; i++ {
+						for j := 0; j < n.Width; j++ {
+							if a.X[i*n.Width+j] > max {
+								max = a.X[i*n.Width+j]
+								x, y = j, i
+							}
+						}
+					}
+					return true
+				})
+				fmt.Println(n.Index, x, y, max)
+				n.In <- Message{
+					I: x,
+				}
+				n.In <- Message{
+					I: y,
+				}
+
 				average := make([]float32, n.Width)
 				for j := 0; j < n.Length; j++ {
 					for k := 0; k < n.Width; k++ {
@@ -188,6 +216,7 @@ func (n *Node) Live() {
 				for k := 0; k < n.Width; k++ {
 					average[k] /= float32(n.Length)
 				}
+				fmt.Println(n.Index, average)
 				n.Out <- Message{
 					I: n.Index,
 					V: average,
@@ -229,10 +258,12 @@ func Softmax(k tf32.Continuation, node int, a *tf32.V, options ...map[string]int
 }
 
 var (
-	//FlagClassical classical mode
+	// FlagClassical classical mode
 	FlagClassical = flag.Bool("classical", false, "classical mode")
-	//FlagQuantum quantum mode
+	// FlagQuantum quantum mode
 	FlagQuantum = flag.Bool("quantum", false, "quantum mode")
+	// FlagDistributed distributed mode
+	FlagDistributed = flag.Bool("distributed", false, "distributed mode")
 )
 
 func main() {
@@ -244,6 +275,31 @@ func main() {
 	if *FlagQuantum {
 		Quantum()
 		return
+	}
+	if *FlagDistributed {
+		Distributed()
+		return
+	}
+}
+
+// Distributed distributed mode
+func Distributed() {
+	in, out := make([]chan Message, 8), make([]chan Message, 8)
+	for i := range in {
+		in[i] = make(chan Message, 8)
+	}
+	nodes := make([]*Node, 8)
+	for i := range nodes {
+		nodes[i] = NewNode(int64(i+1), i, 8, 8, in[i])
+		out[i] = nodes[i].Out
+	}
+	head := NewNode(9, 9, 8, 8, merge(out...))
+	for _, n := range nodes {
+		go n.Live(false)
+	}
+	go head.Live(true)
+	for m := range head.Out {
+		fmt.Println(m)
 	}
 }
 
