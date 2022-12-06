@@ -42,7 +42,7 @@ const (
 	// Eta is the learning rate
 	EtaClassical = .001
 	// EtaDistributed is the learning rate
-	EtaDistributed = .00001
+	EtaDistributed = .001
 	// Eta is the learning rate
 	EtaQuantum = .001
 	// AlphaQuantum is the momentum
@@ -236,6 +236,9 @@ func Softmax(k tf32.Continuation, node int, a *tf32.V, options ...map[string]int
 		sum := 0.0
 		for j, ax := range a.X[i : i+width] {
 			values[j] = math.Exp(float64(ax) - s)
+			if math.IsNaN(values[j]) {
+				panic(fmt.Errorf("nan %d %d %f", i, j, ax))
+			}
 			sum += values[j]
 		}
 		for _, cx := range values {
