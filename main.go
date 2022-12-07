@@ -42,7 +42,7 @@ const (
 	// Eta is the learning rate
 	EtaClassical = .001
 	// EtaDistributed is the learning rate
-	EtaDistributed = .001
+	EtaDistributed = .00001
 	// Eta is the learning rate
 	EtaQuantum = .001
 	// AlphaQuantum is the momentum
@@ -79,6 +79,7 @@ type Node struct {
 	Out    chan Message
 	Reply  chan Message
 	Set    tf32.Set
+	Others tf32.Set
 }
 
 // NewNode creates a new node
@@ -97,6 +98,11 @@ func NewNode(seed int64, index, width, length int, in, R []chan Message) *Node {
 		}
 	}
 
+	others := tf32.NewSet()
+	others.Add("zero_point", 1, 1)
+	zero := others.ByName["zero_point"]
+	zero.X = append(zero.X, .1)
+
 	return &Node{
 		Index:  index,
 		Width:  width,
@@ -107,6 +113,7 @@ func NewNode(seed int64, index, width, length int, in, R []chan Message) *Node {
 		Out:    make(chan Message, 8),
 		Reply:  make(chan Message, 8),
 		Set:    set,
+		Others: others,
 	}
 }
 
@@ -125,7 +132,7 @@ func (n *Node) Live(fire bool) {
 	a := tf32.Mul(n.Set.Get("points"), n.Set.Get("points"))
 	l1 := softmax(a)
 	l2 := softmax(tf32.Mul(tf32.T(n.Set.Get("points")), l1))
-	cost := tf32.Sum(tf32.Entropy(l2))
+	cost := tf32.Sub(tf32.Sum(tf32.Entropy(l2)), n.Others.Get("zero_point"))
 	lock := sync.RWMutex{}
 	go func() {
 		for m := range n.Reply {
@@ -134,14 +141,14 @@ func (n *Node) Live(fire bool) {
 			copy(weights, n.Set.Weights[0].X[m.I*n.Width:m.I*n.Width+n.Width])
 			lock.RUnlock()
 			m.V = weights
-			fmt.Println("there", n.Index, m.I, m.V)
+			fmt.Println("Reply", n.Index, m.I, m.V)
 			n.Out <- m
 		}
 	}()
 	for i := range n.In {
 		go func(i int) {
 			for m := range n.In[i] {
-				fmt.Println("over there", n.Index, m.I, m.V, len(n.In[i]))
+				fmt.Println("In", n.Index, m.I, m.V, len(n.In[i]))
 				lock.Lock()
 				copy(n.Set.Weights[0].X[m.I*n.Width:m.I*n.Width+n.Width], m.V)
 				lock.Unlock()
@@ -174,7 +181,7 @@ func (n *Node) Live(fire bool) {
 		n.Set.Zero()
 
 		if math.IsNaN(float64(total)) {
-			fmt.Println(n.Set.Weights[0].States)
+			fmt.Println("states", n.Set.Weights[0].States)
 			panic(fmt.Errorf("nan %d", n.Index))
 		}
 
@@ -194,7 +201,7 @@ func (n *Node) Live(fire bool) {
 				}
 				return true
 			})
-			fmt.Println(n.Index, x, y, max)
+			fmt.Println("fire", n.Index, x, y, max)
 			n.R[x] <- Message{
 				I: x,
 			}
