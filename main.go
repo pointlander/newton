@@ -132,7 +132,7 @@ func (n *Node) Live(fire bool) {
 	a := tf32.Mul(n.Set.Get("points"), n.Set.Get("points"))
 	l1 := softmax(a)
 	l2 := softmax(tf32.Mul(tf32.T(n.Set.Get("points")), l1))
-	cost := tf32.Sub(tf32.Sum(tf32.Entropy(l2)), n.Others.Get("zero_point"))
+	cost := tf32.Sub(tf32.Avg(tf32.Entropy(l2)), n.Others.Get("zero_point"))
 	lock := sync.RWMutex{}
 	go func() {
 		for m := range n.Reply {
