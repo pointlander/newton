@@ -201,7 +201,7 @@ func (n *Node) Live(fire bool) {
 				}
 				return true
 			})
-			fmt.Println("fire", n.Index, x, y, max)
+			fmt.Println("fire", total, n.Index, x, y, max)
 			n.R[x] <- Message{
 				I: x,
 			}
