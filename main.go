@@ -262,6 +262,36 @@ func Softmax(k tf32.Continuation, node int, a *tf32.V, options ...map[string]int
 	return false
 }
 
+// SphericalSoftmax is the spherical softmax function
+// https://arxiv.org/abs/1511.05042
+func SphericalSoftmax(k tf32.Continuation, node int, a *tf32.V, options ...map[string]interface{}) bool {
+	const E = .000001
+	c, size, width := tf32.NewV(a.S...), len(a.X), a.S[0]
+	values, sums, row := make([]float32, width), make([]float32, a.S[1]), 0
+	for i := 0; i < size; i += width {
+		sum := float32(0.0)
+		for j, ax := range a.X[i : i+width] {
+			values[j] = ax*ax + E
+			sum += values[j]
+		}
+		for _, cx := range values {
+			c.X = append(c.X, (cx+E)/sum)
+		}
+		sums[row] = sum
+		row++
+	}
+	if k(&c) {
+		return true
+	}
+	// (2 a (b^2 + c^2 + d^2 + 0.003))/(a^2 + b^2 + c^2 + d^2 + 0.004)^2
+	for i, d := range c.D {
+		ax, sum := a.X[i], sums[i/width]
+		//a.D[i] += d*(2*ax*(sum-(ax*ax+E)))/(sum*sum) - d*cx*2*ax/sum
+		a.D[i] += d * (2 * ax * (sum - (ax*ax + E))) / (sum * sum)
+	}
+	return false
+}
+
 var (
 	// FlagClassical classical mode
 	FlagClassical = flag.Bool("classical", false, "classical mode")
@@ -584,8 +614,11 @@ func Classical() {
 
 	// The neural network is the attention model from attention is all you need
 	softmax := tf32.U(Softmax)
-	l1 := softmax(tf32.Mul(set.Get("points"), set.Get("points")))
-	l2 := softmax(tf32.Mul(tf32.T(set.Get("points")), l1))
+	_ = softmax
+	spherical := tf32.U(SphericalSoftmax)
+	_ = spherical
+	l1 := spherical(tf32.Mul(set.Get("points"), set.Get("points")))
+	l2 := spherical(tf32.Mul(tf32.T(set.Get("points")), l1))
 	cost := tf32.Sum(tf32.Entropy(l2))
 
 	project := func(x []float32) plotter.XYs {
