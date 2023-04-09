@@ -299,6 +299,8 @@ var (
 	FlagQuantum = flag.Bool("quantum", false, "quantum mode")
 	// FlagDistributed distributed mode
 	FlagDistributed = flag.Bool("distributed", false, "distributed mode")
+	// FlagEntropy entropy mode
+	FlagEntropy = flag.Bool("entropy", false, "entropy mode")
 )
 
 func main() {
@@ -313,6 +315,10 @@ func main() {
 	}
 	if *FlagDistributed {
 		Distributed()
+		return
+	}
+	if *FlagEntropy {
+		Entropy()
 		return
 	}
 }
@@ -792,6 +798,67 @@ func Classical() {
 	p.Add(scatter)
 
 	err = p.Save(8*vg.Inch, 8*vg.Inch, "projection.png")
+	if err != nil {
+		panic(err)
+	}
+}
+
+// Entropy calculates the entropy as connections are made
+func Entropy() {
+	rnd := rand.New(rand.NewSource(1))
+
+	width, length := 256, 256
+
+	// Create the weight data matrix
+	set := tf32.NewSet()
+	set.Add("points", width, length)
+	for _, w := range set.Weights {
+		for i := 0; i < cap(w.X); i++ {
+			w.X = append(w.X, 0)
+		}
+		w.States = make([][]float32, StateTotal)
+		for i := range w.States {
+			w.States[i] = make([]float32, len(w.X))
+		}
+	}
+	particles := set.ByName["points"].X
+
+	softmax := tf32.U(Softmax)
+	l1 := softmax(tf32.Mul(set.Get("points"), set.Get("points")))
+	l2 := softmax(tf32.Mul(tf32.T(set.Get("points")), l1))
+	cost := tf32.Sum(tf32.Entropy(l2))
+
+	points := make(plotter.XYs, 0, 8)
+	// The stochastic gradient descent loop
+	for i := 0; i < length*width; i++ {
+		start := time.Now()
+		cost(func(a *tf32.V) bool {
+			points = append(points, plotter.XY{X: float64(i), Y: float64(a.X[0])})
+			return false
+		})
+
+		end := time.Since(start)
+		fmt.Println(i, end)
+		set.Zero()
+		particles[rnd.Intn(len(particles))] = 1
+	}
+
+	// Plot the cost
+	p := plot.New()
+
+	p.Title.Text = "epochs vs entropy"
+	p.X.Label.Text = "epochs"
+	p.Y.Label.Text = "entropy"
+
+	scatter, err := plotter.NewScatter(points)
+	if err != nil {
+		panic(err)
+	}
+	scatter.GlyphStyle.Radius = vg.Length(1)
+	scatter.GlyphStyle.Shape = draw.CircleGlyph{}
+	p.Add(scatter)
+
+	err = p.Save(8*vg.Inch, 8*vg.Inch, "entropy.png")
 	if err != nil {
 		panic(err)
 	}
